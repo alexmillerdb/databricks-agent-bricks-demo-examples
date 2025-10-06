@@ -1,63 +1,105 @@
-from mlflow.deployments import get_deploy_client
+import os
+from typing import Generator
 from databricks.sdk import WorkspaceClient
+import mlflow
+from mlflow.entities.span import SpanType
+from mlflow.pyfunc import ResponsesAgent
+from mlflow.types.responses import (
+    ResponsesAgentRequest,
+    ResponsesAgentResponse,
+    ResponsesAgentStreamEvent,
+)
 
-def _get_endpoint_task_type(endpoint_name: str) -> str:
-    """Get the task type of a serving endpoint."""
-    w = WorkspaceClient()
-    ep = w.serving_endpoints.get(endpoint_name)
-    return ep.task
 
-def is_endpoint_supported(endpoint_name: str) -> bool:
-    """Check if the endpoint has a supported task type."""
-    task_type = _get_endpoint_task_type(endpoint_name)
-    supported_task_types = ["agent/v1/chat", "agent/v2/chat", "llm/v1/chat"]
-    return task_type in supported_task_types
-
-def _validate_endpoint_task_type(endpoint_name: str) -> None:
-    """Validate that the endpoint has a supported task type."""
-    if not is_endpoint_supported(endpoint_name):
-        raise Exception(
-            f"Detected unsupported endpoint type for this basic chatbot template. "
-            f"This chatbot template only supports chat completions-compatible endpoints. "
-            f"For a richer chatbot template with support for all conversational endpoints on Databricks, "
-            f"see https://docs.databricks.com/aws/en/generative-ai/agent-framework/chat-app"
-        )
-
-def _query_endpoint(endpoint_name: str, messages: list[dict[str, str]], max_tokens) -> list[dict[str, str]]:
-    """Calls a model serving endpoint."""
-    _validate_endpoint_task_type(endpoint_name)
-    
-    res = get_deploy_client('databricks').predict(
-        endpoint=endpoint_name,
-        inputs={'messages': messages, "max_tokens": max_tokens},
-    )
-    if "messages" in res:
-        return res["messages"]
-    elif "choices" in res:
-        choice_message = res["choices"][0]["message"]
-        choice_content = choice_message.get("content")
-        
-        # Case 1: The content is a list of structured objects
-        if isinstance(choice_content, list):
-            combined_content = "".join([part.get("text", "") for part in choice_content if part.get("type") == "text"])
-            reformatted_message = {
-                "role": choice_message.get("role"),
-                "content": combined_content
-            }
-            return [reformatted_message]
-        
-        # Case 2: The content is a simple string
-        elif isinstance(choice_content, str):
-            return [choice_message]
-    raise Exception("This app can only run against:"
-                    "1) Databricks foundation model or external model endpoints with the chat task type (described in https://docs.databricks.com/aws/en/machine-learning/model-serving/score-foundation-models#chat-completion-model-query)"
-                    "2) Databricks agent serving endpoints that implement the conversational agent schema documented "
-                    "in https://docs.databricks.com/aws/en/generative-ai/agent-framework/author-agent")
-
-def query_endpoint(endpoint_name, messages, max_tokens):
+class SimpleResponsesAgent(ResponsesAgent):
     """
-    Query a chat-completions or agent serving endpoint
-    If querying an agent serving endpoint that returns multiple messages, this method
-    returns the last message
-    ."""
-    return _query_endpoint(endpoint_name, messages, max_tokens)[-1]
+    Production-ready Responses Agent for querying Databricks serving endpoints.
+
+    Supports both streaming and non-streaming modes with MLflow tracing.
+    """
+
+    def __init__(self, model: str):
+        """
+        Initialize the ResponsesAgent.
+
+        Args:
+            model: The name of the Databricks serving endpoint to query
+        """
+        self.client = WorkspaceClient().serving_endpoints.get_open_ai_client()
+        self.model = model
+
+    @mlflow.trace(span_type=SpanType.AGENT)
+    def predict_stream(
+        self, request: ResponsesAgentRequest
+    ) -> Generator[ResponsesAgentStreamEvent, None, None]:
+        """
+        Query the endpoint with streaming enabled.
+
+        Args:
+            request: ResponsesAgentRequest containing the conversation input
+
+        Yields:
+            ResponsesAgentStreamEvent objects as tokens arrive
+        """
+        for event in self.client.responses.create(
+            input=request.input, stream=True, model=self.model
+        ):
+            # Yield the raw event object directly without conversion
+            # The event is already compatible with ResponsesAgentStreamEvent
+            yield event
+
+    @mlflow.trace(span_type=SpanType.AGENT)
+    def predict(
+        self, request: ResponsesAgentRequest
+    ) -> ResponsesAgentResponse:
+        """
+        Query the endpoint without streaming (synchronous response).
+
+        Args:
+            request: ResponsesAgentRequest containing the conversation input
+
+        Returns:
+            ResponsesAgentResponse with the complete response
+        """
+        response = self.client.responses.create(
+            input=request.input, stream=False, model=self.model
+        )
+        # Return the raw response object directly
+        return response
+
+
+def get_agent(endpoint_name: str) -> SimpleResponsesAgent:
+    """
+    Factory function to create a ResponsesAgent instance.
+
+    Args:
+        endpoint_name: Name of the Databricks serving endpoint
+
+    Returns:
+        SimpleResponsesAgent instance configured for the endpoint
+    """
+    return SimpleResponsesAgent(model=endpoint_name)
+
+
+def log_user_feedback(trace_id: str, thumbs_up: bool, comment: str = "", user_id: str = "unknown"):
+    """
+    Log user feedback for a specific trace to MLflow.
+
+    Args:
+        trace_id: The MLflow trace ID to attach feedback to
+        thumbs_up: True for positive feedback, False for negative
+        comment: Optional text comment from the user
+        user_id: User identifier (email, username, etc.)
+    """
+    from mlflow.entities.assessment import AssessmentSource, AssessmentSourceType
+
+    mlflow.log_feedback(
+        trace_id=trace_id,
+        name="user_feedback",
+        value=thumbs_up,
+        rationale=comment if comment else ("Positive feedback" if thumbs_up else "Negative feedback"),
+        source=AssessmentSource(
+            source_type=AssessmentSourceType.HUMAN,
+            source_id=user_id
+        ),
+    )
