@@ -22,7 +22,7 @@ Production-ready chatbot application built with Databricks Agent Framework, feat
    databricks auth login --host https://your-workspace.cloud.databricks.com
    ```
 
-2. **Python 3.9+** with pip
+2. **Python 3.10+** with pip
 
 ### Setup
 
