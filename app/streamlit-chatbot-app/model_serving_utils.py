@@ -1,5 +1,4 @@
-import os
-from typing import Generator
+from typing import Generator, Optional
 from databricks.sdk import WorkspaceClient
 import mlflow
 from mlflow.pyfunc import ResponsesAgent
@@ -8,6 +7,9 @@ from mlflow.types.responses import (
     ResponsesAgentResponse,
     ResponsesAgentStreamEvent,
 )
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class SimpleResponsesAgent(ResponsesAgent):
@@ -26,6 +28,7 @@ class SimpleResponsesAgent(ResponsesAgent):
         """
         self.client = WorkspaceClient().serving_endpoints.get_open_ai_client()
         self.model = model
+        self.current_trace_id: Optional[str] = None
 
     def predict_stream(
         self, request: ResponsesAgentRequest
@@ -39,15 +42,46 @@ class SimpleResponsesAgent(ResponsesAgent):
         Yields:
             ResponsesAgentStreamEvent objects as tokens arrive
 
-        Note: @mlflow.trace decorator removed to avoid serialization issues with streaming events.
-        Tracing is still captured via the predict() method for non-streaming calls.
+        Note: Uses manual span tracing to avoid Pydantic serialization issues with streaming events.
         """
-        for event in self.client.responses.create(
-            input=request.input, stream=True, model=self.model
-        ):
-            # Yield the raw event object directly without conversion
-            # The event is already compatible with ResponsesAgentStreamEvent
-            yield event
+        # Start manual span with minimal metadata to avoid serialization issues
+        with mlflow.start_span(name="responses_agent_stream") as span:
+            # Store the trace ID from the span
+            self.current_trace_id = span.request_id
+            logger.info(f"Started manual trace: {self.current_trace_id}")
+
+            try:
+                response_text = []
+                event_count = 0
+
+                for event in self.client.responses.create(
+                    input=request.input, stream=True, model=self.model
+                ):
+                    event_count += 1
+
+                    # Collect text deltas for trace output
+                    if hasattr(event, 'delta') and event.delta:
+                        response_text.append(event.delta)
+
+                    # Yield the raw event object directly without conversion
+                    yield event
+
+                # Set span attributes with simple values (avoiding complex object serialization)
+                span.set_attribute("event_count", event_count)
+                span.set_attribute("model", self.model)
+                span.set_attribute("response_preview", "".join(response_text)[:500] if response_text else "")
+                logger.info(f"Completed trace successfully: {self.current_trace_id}")
+
+            except Exception as e:
+                # Set error status on span
+                span.set_status("ERROR")
+                span.set_attribute("error", str(e))
+                logger.error(f"Error in predict_stream: {e}")
+                raise
+
+    def get_last_trace_id(self) -> Optional[str]:
+        """Get the trace ID from the last predict_stream call."""
+        return self.current_trace_id
 
     def predict(
         self, request: ResponsesAgentRequest

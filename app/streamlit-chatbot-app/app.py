@@ -11,7 +11,7 @@ from model_serving_utils import get_agent, log_user_feedback
 load_dotenv()
 
 # Set up logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 # Ensure environment variable is set correctly
@@ -264,16 +264,16 @@ if prompt := st.chat_input("Ask me anything about your supply chain or finance d
             response_placeholder.markdown(markdown, unsafe_allow_html=True)
             logger.info(f"Stream complete. Total events: {event_count}, Sections: {len(sections)}")
 
-            # Store the trace ID for feedback
+            # Store the trace ID for feedback (from manual tracing)
             try:
-                logger.info("Retrieving MLflow trace ID...")
-                trace_id = mlflow.get_last_active_trace_id()
+                logger.info("Retrieving trace ID from agent...")
+                trace_id = agent.get_last_trace_id()
                 if trace_id:
-                    logger.info(f"Trace ID retrieved: {trace_id}, type: {type(trace_id)}")
+                    logger.info(f"Trace ID retrieved: {trace_id}")
                     st.session_state.trace_ids.append(trace_id)
                     logger.info(f"Trace ID stored successfully")
                 else:
-                    logger.warning("No trace ID available")
+                    logger.warning("No trace ID available from agent")
             except Exception as e:
                 logger.error(f"Error retrieving or storing trace ID: {e}", exc_info=True)
 

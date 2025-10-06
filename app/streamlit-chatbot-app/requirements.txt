@@ -3,3 +3,4 @@ openai
 streamlit==1.44.1
 databricks-sdk
 python-dotenv
+pydantic>=2.9,<2.10
