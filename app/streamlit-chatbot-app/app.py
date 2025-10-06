@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import streamlit as st
@@ -47,6 +48,60 @@ def get_user_info():
 
 
 user_info = get_user_info()
+
+
+def render_agent_response(sections, streaming_text=""):
+    """
+    Build markdown for all response sections.
+
+    Args:
+        sections: List of (type, content) tuples
+        streaming_text: Currently streaming text to append with cursor
+
+    Returns:
+        Tuple of (markdown_string, full_text_response)
+    """
+    markdown_parts = []
+    full_text_parts = []
+
+    for section_type, content in sections:
+        if section_type == "text":
+            markdown_parts.append(content)
+            full_text_parts.append(content)
+
+        elif section_type == "agent_name":
+            markdown_parts.append(f"\n\n<details>\n<summary>🤖 Agent: {content}</summary>\n\nRouting to agent: {content}\n\n</details>\n")
+
+        elif section_type == "tool_call":
+            try:
+                formatted_args = json.dumps(json.loads(content['args']), indent=2)
+            except:
+                formatted_args = content['args']
+            markdown_parts.append(f"\n\n<details>\n<summary>🔧 Tool Call: {content['name']}</summary>\n\n```json\n{formatted_args}\n```\n\n</details>\n")
+
+        elif section_type == "tool_output":
+            # Skip displaying tool output if it's just a handoff message or contains large tables
+            if content and not content.startswith("Handed off to:"):
+                # Check if output looks like structured data (tables, large text)
+                is_large_table = content.count('|') > 20 or len(content) > 1000
+
+                if is_large_table:
+                    # For large tables/data, just show a summary in the expander
+                    lines = content.split('\n')[:3]
+                    preview = '\n'.join(lines)
+                    markdown_parts.append(f"\n\n<details>\n<summary>📤 Tool Output (large dataset - click to expand)</summary>\n\n```\n{preview}\n...\n[{len(content)} characters total]\n```\n\n</details>\n")
+                else:
+                    # Show smaller outputs normally
+                    display_output = content if len(content) <= 500 else content[:500] + "\n\n... (truncated)"
+                    markdown_parts.append(f"\n\n<details>\n<summary>📤 Tool Output</summary>\n\n```\n{display_output}\n```\n\n</details>\n")
+
+    # Show currently streaming text with cursor
+    if streaming_text:
+        markdown_parts.append("\n\n" + streaming_text + "▌")
+        full_text_parts.append(streaming_text)
+
+    return "".join(markdown_parts), "\n\n".join(full_text_parts)
+
 
 # Streamlit app
 if "visibility" not in st.session_state:
@@ -112,41 +167,130 @@ if prompt := st.chat_input("Ask me anything about your supply chain or finance d
                    for msg in st.session_state.messages]
         )
 
-        # Stream the response
-        response_placeholder = st.empty()
-        full_response = ""
-
+        # Stream the response with full agent reasoning display
         try:
+            logger.info("Starting streaming response...")
+            event_count = 0
+
+            # Track all response sections
+            sections = []  # List of tuples: (type, content)
+            current_text = ""
+            current_item_id = None
+            streamed_item_ids = set()  # Track which items we've streamed
+
+            # Single placeholder for updating display
+            response_placeholder = st.empty()
+
             for event in agent.predict_stream(request):
+                event_count += 1
+                logger.info(f"Event {event_count}: type={event.type}, event class={type(event).__name__}")
+
                 # Handle different event types from the Responses API
                 if event.type == "response.output_text.delta":
-                    # Accumulate text deltas
+                    # Accumulate text deltas for the current streaming message
                     if hasattr(event, 'delta') and event.delta:
-                        full_response += event.delta
-                        response_placeholder.markdown(full_response + "▌")
-                elif event.type == "response.output_item_done":
-                    # Final complete response
-                    if hasattr(event, 'output_item') and hasattr(event.output_item, 'content'):
-                        for content_item in event.output_item.content:
-                            if hasattr(content_item, 'text'):
-                                full_response = content_item.text
+                        if hasattr(event, 'item_id') and event.item_id != current_item_id:
+                            # New text stream starting
+                            if current_text:
+                                # Save previous text section
+                                sections.append(("text", current_text))
+                                streamed_item_ids.add(current_item_id)
+                            current_text = event.delta
+                            current_item_id = event.item_id
+                        else:
+                            current_text += event.delta
 
-            # Display final response without cursor
-            response_placeholder.markdown(full_response)
+                        # Update display (only during streaming text)
+                        markdown, _ = render_agent_response(sections, current_text)
+                        response_placeholder.markdown(markdown, unsafe_allow_html=True)
+
+                elif event.type == "response.output_item.done":
+                    # Save any accumulated text first
+                    if current_text:
+                        sections.append(("text", current_text))
+                        streamed_item_ids.add(current_item_id)
+                        current_text = ""
+                        current_item_id = None
+
+                    if hasattr(event, 'item'):
+                        item = event.item
+                        item_id = getattr(item, 'id', None)
+                        logger.info(f"Item type: {getattr(item, 'type', 'unknown')}, id: {item_id}")
+
+                        # Handle different item types
+                        if hasattr(item, 'type'):
+                            if item.type == 'function_call':
+                                # Show tool call
+                                tool_name = getattr(item, 'name', 'unknown')
+                                tool_args = getattr(item, 'arguments', '{}')
+                                sections.append(("tool_call", {"name": tool_name, "args": tool_args}))
+                                # Update display
+                                markdown, _ = render_agent_response(sections)
+                                response_placeholder.markdown(markdown, unsafe_allow_html=True)
+
+                            elif item.type == 'function_call_output':
+                                # Show tool output
+                                output = getattr(item, 'output', '')
+                                sections.append(("tool_output", output))
+                                # Update display
+                                markdown, _ = render_agent_response(sections)
+                                response_placeholder.markdown(markdown, unsafe_allow_html=True)
+
+                            elif item.type == 'message':
+                                # Only process message items that we haven't already streamed
+                                if item_id not in streamed_item_ids:
+                                    # Extract any complete text from message items
+                                    if hasattr(item, 'content'):
+                                        for content_item in item.content:
+                                            if hasattr(content_item, 'type') and content_item.type == 'output_text':
+                                                if hasattr(content_item, 'text'):
+                                                    # Check if this is agent name metadata (contains <name>)
+                                                    text = content_item.text
+                                                    if text.startswith('<name>') and text.endswith('</name>'):
+                                                        agent_name = text[6:-7]  # Extract name
+                                                        sections.append(("agent_name", agent_name))
+                                                        # Update display
+                                                        markdown, _ = render_agent_response(sections)
+                                                        response_placeholder.markdown(markdown, unsafe_allow_html=True)
+                                                    elif text != "EMPTY":
+                                                        # Add non-streamed message text
+                                                        sections.append(("text", text))
+                                                        # Update display
+                                                        markdown, _ = render_agent_response(sections)
+                                                        response_placeholder.markdown(markdown, unsafe_allow_html=True)
+
+            # Final render without cursor
+            markdown, full_response = render_agent_response(sections)
+            response_placeholder.markdown(markdown, unsafe_allow_html=True)
+            logger.info(f"Stream complete. Total events: {event_count}, Sections: {len(sections)}")
 
             # Store the trace ID for feedback
-            trace_id = mlflow.get_last_active_trace_id()
-            if trace_id:
-                st.session_state.trace_ids.append(trace_id)
-                logger.info(f"Trace ID for this interaction: {trace_id}")
+            try:
+                logger.info("Retrieving MLflow trace ID...")
+                trace_id = mlflow.get_last_active_trace_id()
+                if trace_id:
+                    logger.info(f"Trace ID retrieved: {trace_id}, type: {type(trace_id)}")
+                    st.session_state.trace_ids.append(trace_id)
+                    logger.info(f"Trace ID stored successfully")
+                else:
+                    logger.warning("No trace ID available")
+            except Exception as e:
+                logger.error(f"Error retrieving or storing trace ID: {e}", exc_info=True)
 
         except Exception as e:
-            logger.error(f"Error querying endpoint: {e}")
+            logger.error(f"Error querying endpoint: {e}", exc_info=True)
             full_response = f"⚠️ Error: {str(e)}\n\nPlease check the endpoint configuration and try again."
             response_placeholder.markdown(full_response)
 
     # Add assistant response to chat history
-    st.session_state.messages.append({"role": "assistant", "content": full_response})
+    try:
+        logger.info(f"Storing assistant response in session state (length: {len(full_response)})")
+        st.session_state.messages.append({"role": "assistant", "content": full_response})
+        logger.info("Successfully stored assistant response")
+    except Exception as e:
+        logger.error(f"Error storing assistant response in session state: {e}", exc_info=True)
+        # Try to store a simplified version
+        st.session_state.messages.append({"role": "assistant", "content": str(full_response)})
 
 # Sidebar with additional information
 with st.sidebar:

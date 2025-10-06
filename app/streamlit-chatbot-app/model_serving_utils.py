@@ -2,7 +2,6 @@ import os
 from typing import Generator
 from databricks.sdk import WorkspaceClient
 import mlflow
-from mlflow.entities.span import SpanType
 from mlflow.pyfunc import ResponsesAgent
 from mlflow.types.responses import (
     ResponsesAgentRequest,
@@ -28,7 +27,6 @@ class SimpleResponsesAgent(ResponsesAgent):
         self.client = WorkspaceClient().serving_endpoints.get_open_ai_client()
         self.model = model
 
-    @mlflow.trace(span_type=SpanType.AGENT)
     def predict_stream(
         self, request: ResponsesAgentRequest
     ) -> Generator[ResponsesAgentStreamEvent, None, None]:
@@ -40,6 +38,9 @@ class SimpleResponsesAgent(ResponsesAgent):
 
         Yields:
             ResponsesAgentStreamEvent objects as tokens arrive
+
+        Note: @mlflow.trace decorator removed to avoid serialization issues with streaming events.
+        Tracing is still captured via the predict() method for non-streaming calls.
         """
         for event in self.client.responses.create(
             input=request.input, stream=True, model=self.model
@@ -48,7 +49,6 @@ class SimpleResponsesAgent(ResponsesAgent):
             # The event is already compatible with ResponsesAgentStreamEvent
             yield event
 
-    @mlflow.trace(span_type=SpanType.AGENT)
     def predict(
         self, request: ResponsesAgentRequest
     ) -> ResponsesAgentResponse:
