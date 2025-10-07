@@ -11,7 +11,7 @@ from model_serving_utils import get_agent, log_user_feedback
 load_dotenv()
 
 # Set up logging
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Ensure environment variable is set correctly

@@ -63,6 +63,13 @@ class SimpleResponsesAgent(ResponsesAgent):
                     if hasattr(event, 'delta') and event.delta:
                         response_text.append(event.delta)
 
+                    # Filter out problematic function_call_output events to avoid Pydantic warnings
+                    if hasattr(event, 'item') and hasattr(event.item, 'type'):
+                        if event.item.type == 'function_call_output':
+                            # Log the handoff but don't yield the problematic event
+                            logger.debug(f"Skipping function_call_output event: {getattr(event.item, 'output', '')}")
+                            continue
+
                     # Yield the raw event object directly without conversion
                     yield event
 
