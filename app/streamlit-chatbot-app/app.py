@@ -135,16 +135,24 @@ for idx, message in enumerate(st.session_state.messages):
 
             # Only show buttons if feedback hasn't been submitted for this message
             if trace_id not in st.session_state.feedback_submitted:
-                col1, col2 = st.columns([1, 10])
+                col1, col2, col3 = st.columns([1, 1, 10])
                 with col1:
                     if st.button("👍", key=f"thumbs_up_{idx}"):
-                        log_user_feedback(trace_id, True, user_id=user_info["user_id"])
-                        st.session_state.feedback_submitted[trace_id] = "positive"
+                        logger.info(f"User clicked thumbs up for historical message, trace_id: {trace_id}")
+                        success = log_user_feedback(trace_id, True, user_id=user_info["user_id"])
+                        if success:
+                            st.session_state.feedback_submitted[trace_id] = "positive"
+                        else:
+                            st.error("Failed to submit feedback. Please check the logs.")
                         st.rerun()
                 with col2:
                     if st.button("👎", key=f"thumbs_down_{idx}"):
-                        log_user_feedback(trace_id, False, user_id=user_info["user_id"])
-                        st.session_state.feedback_submitted[trace_id] = "negative"
+                        logger.info(f"User clicked thumbs down for historical message, trace_id: {trace_id}")
+                        success = log_user_feedback(trace_id, False, user_id=user_info["user_id"])
+                        if success:
+                            st.session_state.feedback_submitted[trace_id] = "negative"
+                        else:
+                            st.error("Failed to submit feedback. Please check the logs.")
                         st.rerun()
             else:
                 feedback_type = st.session_state.feedback_submitted[trace_id]
@@ -265,6 +273,7 @@ if prompt := st.chat_input("Ask me anything about your supply chain or finance d
             logger.info(f"Stream complete. Total events: {event_count}, Sections: {len(sections)}")
 
             # Store the trace ID for feedback (from manual tracing)
+            trace_id = None
             try:
                 logger.info("Retrieving trace ID from agent...")
                 trace_id = agent.get_last_trace_id()
@@ -276,6 +285,36 @@ if prompt := st.chat_input("Ask me anything about your supply chain or finance d
                     logger.warning("No trace ID available from agent")
             except Exception as e:
                 logger.error(f"Error retrieving or storing trace ID: {e}", exc_info=True)
+
+            # Show feedback buttons immediately after response
+            if trace_id and trace_id not in st.session_state.feedback_submitted:
+                st.markdown("---")
+                col1, col2, col3 = st.columns([1, 1, 10])
+                with col1:
+                    if st.button("👍", key="thumbs_up_current"):
+                        logger.info(f"User clicked thumbs up for trace_id: {trace_id}")
+                        success = log_user_feedback(trace_id, True, user_id=user_info["user_id"])
+                        if success:
+                            st.session_state.feedback_submitted[trace_id] = "positive"
+                            logger.info("Feedback submitted successfully, triggering rerun")
+                        else:
+                            logger.error("Feedback submission failed")
+                            st.error("Failed to submit feedback. Please check the logs.")
+                        st.rerun()
+                with col2:
+                    if st.button("👎", key="thumbs_down_current"):
+                        logger.info(f"User clicked thumbs down for trace_id: {trace_id}")
+                        success = log_user_feedback(trace_id, False, user_id=user_info["user_id"])
+                        if success:
+                            st.session_state.feedback_submitted[trace_id] = "negative"
+                            logger.info("Feedback submitted successfully, triggering rerun")
+                        else:
+                            logger.error("Feedback submission failed")
+                            st.error("Failed to submit feedback. Please check the logs.")
+                        st.rerun()
+            elif trace_id and trace_id in st.session_state.feedback_submitted:
+                feedback_type = st.session_state.feedback_submitted[trace_id]
+                st.caption(f"✓ Feedback submitted: {feedback_type}")
 
         except Exception as e:
             logger.error(f"Error querying endpoint: {e}", exc_info=True)

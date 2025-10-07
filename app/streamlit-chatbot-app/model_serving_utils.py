@@ -131,16 +131,29 @@ def log_user_feedback(trace_id: str, thumbs_up: bool, comment: str = "", user_id
         thumbs_up: True for positive feedback, False for negative
         comment: Optional text comment from the user
         user_id: User identifier (email, username, etc.)
+
+    Returns:
+        True if feedback was logged successfully, False otherwise
     """
     from mlflow.entities.assessment import AssessmentSource, AssessmentSourceType
 
-    mlflow.log_feedback(
-        trace_id=trace_id,
-        name="user_feedback",
-        value=thumbs_up,
-        rationale=comment if comment else ("Positive feedback" if thumbs_up else "Negative feedback"),
-        source=AssessmentSource(
-            source_type=AssessmentSourceType.HUMAN,
-            source_id=user_id
-        ),
-    )
+    try:
+        logger.info(f"Attempting to log feedback for trace_id: {trace_id}, thumbs_up: {thumbs_up}, user_id: {user_id}")
+
+        mlflow.log_feedback(
+            trace_id=trace_id,
+            name="user_feedback",
+            value=thumbs_up,
+            rationale=comment if comment else ("Positive feedback" if thumbs_up else "Negative feedback"),
+            source=AssessmentSource(
+                source_type=AssessmentSourceType.HUMAN,
+                source_id=user_id
+            ),
+        )
+
+        logger.info(f"Successfully logged feedback for trace_id: {trace_id}")
+        return True
+
+    except Exception as e:
+        logger.error(f"Failed to log feedback for trace_id {trace_id}: {e}", exc_info=True)
+        return False
