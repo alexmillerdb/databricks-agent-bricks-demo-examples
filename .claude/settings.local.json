@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:docs.databricks.com)",
+      "Bash(export SERVING_ENDPOINT=mas-3bfe8584-endpoint)",
+      "Bash(python test_trace_capture.py:*)",
+      "Bash(export:*)",
+      "Bash(python test_client_request_id.py:*)",
+      "Bash(source:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

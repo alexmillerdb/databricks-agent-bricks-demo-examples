@@ -207,3 +207,7 @@ marimo/_lsp/
 __marimo__/
 
 .databricks
+
+# MLflow
+mlruns/
+app/streamlit-chatbot-app/mlruns/

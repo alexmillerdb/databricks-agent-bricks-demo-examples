@@ -8,6 +8,7 @@ from mlflow.types.responses import (
     ResponsesAgentStreamEvent,
 )
 import logging
+import uuid
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +18,7 @@ class SimpleResponsesAgent(ResponsesAgent):
     Production-ready Responses Agent for querying Databricks serving endpoints.
 
     Supports both streaming and non-streaming modes with MLflow tracing.
+    Uses client_request_id for reliable feedback tracking across traces.
     """
 
     def __init__(self, model: str):
@@ -28,7 +30,7 @@ class SimpleResponsesAgent(ResponsesAgent):
         """
         self.client = WorkspaceClient().serving_endpoints.get_open_ai_client()
         self.model = model
-        self.current_trace_id: Optional[str] = None
+        self.current_client_request_id: Optional[str] = None
 
     def predict_stream(
         self, request: ResponsesAgentRequest
@@ -42,13 +44,18 @@ class SimpleResponsesAgent(ResponsesAgent):
         Yields:
             ResponsesAgentStreamEvent objects as tokens arrive
 
-        Note: Uses manual span tracing to avoid Pydantic serialization issues with streaming events.
+        Note: Uses client request ID approach for feedback tracking.
         """
-        # Start manual span with minimal metadata to avoid serialization issues
+        # Generate unique client request ID for this request
+        client_request_id = f"req-{uuid.uuid4().hex[:8]}"
+        self.current_client_request_id = client_request_id
+        logger.info(f"Generated client request ID: {client_request_id}")
+
+        # Start manual span with client_request_id for feedback tracking
         with mlflow.start_span(name="responses_agent_stream") as span:
-            # Store the trace ID from the span
-            self.current_trace_id = span.trace_id
-            logger.info(f"Started manual trace: {self.current_trace_id}")
+            # Tag the trace with client_request_id for later lookup
+            mlflow.update_current_trace(client_request_id=client_request_id)
+            logger.info(f"Tagged trace with client_request_id: {client_request_id}, trace_id: {span.trace_id}")
 
             try:
                 response_text = []
@@ -76,8 +83,9 @@ class SimpleResponsesAgent(ResponsesAgent):
                 # Set span attributes with simple values (avoiding complex object serialization)
                 span.set_attribute("event_count", event_count)
                 span.set_attribute("model", self.model)
+                span.set_attribute("client_request_id", client_request_id)
                 span.set_attribute("response_preview", "".join(response_text)[:500] if response_text else "")
-                logger.info(f"Completed trace successfully: {self.current_trace_id}")
+                logger.info(f"Completed trace with client_request_id: {client_request_id}")
 
             except Exception as e:
                 # Set error status on span
@@ -86,9 +94,9 @@ class SimpleResponsesAgent(ResponsesAgent):
                 logger.error(f"Error in predict_stream: {e}")
                 raise
 
-    def get_last_trace_id(self) -> Optional[str]:
-        """Get the trace ID from the last predict_stream call."""
-        return self.current_trace_id
+    def get_last_client_request_id(self) -> Optional[str]:
+        """Get the client request ID from the last predict_stream call."""
+        return self.current_client_request_id
 
     def predict(
         self, request: ResponsesAgentRequest
@@ -122,23 +130,58 @@ def get_agent(endpoint_name: str) -> SimpleResponsesAgent:
     return SimpleResponsesAgent(model=endpoint_name)
 
 
-def log_user_feedback(trace_id: str, thumbs_up: bool, comment: str = "", user_id: str = "unknown"):
+def log_user_feedback(client_request_id: str, thumbs_up: bool, comment: str = "", user_id: str = "unknown", experiment_id: str = None):
     """
-    Log user feedback for a specific trace to MLflow.
+    Log user feedback for a specific trace to MLflow using client request ID.
 
     Args:
-        trace_id: The MLflow trace ID to attach feedback to
+        client_request_id: The client request ID to find the trace
         thumbs_up: True for positive feedback, False for negative
         comment: Optional text comment from the user
         user_id: User identifier (email, username, etc.)
+        experiment_id: MLflow experiment ID to search in (uses MLFLOW_EXPERIMENT_ID env var if not provided)
 
     Returns:
         True if feedback was logged successfully, False otherwise
     """
     from mlflow.entities.assessment import AssessmentSource, AssessmentSourceType
+    from mlflow.tracking import MlflowClient
+    import os
 
     try:
-        logger.info(f"Attempting to log feedback for trace_id: {trace_id}, thumbs_up: {thumbs_up}, user_id: {user_id}")
+        logger.info(f"Attempting to log feedback for client_request_id: {client_request_id}, thumbs_up: {thumbs_up}, user_id: {user_id}")
+
+        # Get experiment ID from env if not provided
+        if experiment_id is None:
+            experiment_id = os.environ.get("MLFLOW_EXPERIMENT_ID", "0")  # Default to experiment 0
+            logger.info(f"Using experiment_id: {experiment_id}")
+
+        # Search for trace using client_request_id
+        # Note: The Databricks docs show using filter_string with 'attributes.client_request_id',
+        # but this doesn't work in local MLflow (only in Databricks-hosted MLflow).
+        # We search recent traces and filter manually instead.
+        client = MlflowClient()
+
+        # Search recent traces and filter manually by client_request_id
+        recent_traces = client.search_traces(
+            experiment_ids=[experiment_id],
+            max_results=50,  # Search recent traces
+            order_by=["timestamp DESC"]
+        )
+
+        # Find matching trace
+        matching_trace = None
+        for trace in recent_traces:
+            if hasattr(trace.info, 'client_request_id') and trace.info.client_request_id == client_request_id:
+                matching_trace = trace
+                break
+
+        if not matching_trace:
+            logger.error(f"No trace found for client_request_id: {client_request_id} in experiment {experiment_id}")
+            return False
+
+        trace_id = matching_trace.info.trace_id
+        logger.info(f"Found trace_id: {trace_id} for client_request_id: {client_request_id}")
 
         mlflow.log_feedback(
             trace_id=trace_id,
@@ -151,9 +194,9 @@ def log_user_feedback(trace_id: str, thumbs_up: bool, comment: str = "", user_id
             ),
         )
 
-        logger.info(f"Successfully logged feedback for trace_id: {trace_id}")
+        logger.info(f"Successfully logged feedback for trace_id: {trace_id} (client_request_id: {client_request_id})")
         return True
 
     except Exception as e:
-        logger.error(f"Failed to log feedback for trace_id {trace_id}: {e}", exc_info=True)
+        logger.error(f"Failed to log feedback for client_request_id {client_request_id}: {e}", exc_info=True)
         return False

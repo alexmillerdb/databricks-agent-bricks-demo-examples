@@ -134,8 +134,8 @@ st.markdown(
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-if "trace_ids" not in st.session_state:
-    st.session_state.trace_ids = []
+if "client_request_ids" not in st.session_state:
+    st.session_state.client_request_ids = []
 
 # Display chat messages from history on app rerun
 for idx, message in enumerate(st.session_state.messages):
@@ -147,35 +147,35 @@ for idx, message in enumerate(st.session_state.messages):
             # Calculate which trace this message corresponds to
             assistant_idx = sum(1 for m in st.session_state.messages[:idx+1] if m["role"] == "assistant") - 1
 
-            if assistant_idx < len(st.session_state.trace_ids):
-                trace_id = st.session_state.trace_ids[assistant_idx]
+            if assistant_idx < len(st.session_state.client_request_ids):
+                client_request_id = st.session_state.client_request_ids[assistant_idx]
 
                 # Only show buttons if feedback hasn't been submitted for this message
-                if trace_id not in st.session_state.feedback_submitted:
+                if client_request_id not in st.session_state.feedback_submitted:
                     st.markdown("---")
                     col1, col2, col3 = st.columns([1, 1, 10])
                     with col1:
                         if st.button("👍", key=f"thumbs_up_{idx}"):
-                            logger.info(f"User clicked thumbs up for message {idx}, trace_id: {trace_id}")
-                            success = log_user_feedback(trace_id, True, user_id=user_info["user_id"])
+                            logger.info(f"User clicked thumbs up for message {idx}, client_request_id: {client_request_id}")
+                            success = log_user_feedback(client_request_id, True, user_id=user_info["user_id"])
                             if success:
-                                st.session_state.feedback_submitted[trace_id] = "positive"
+                                st.session_state.feedback_submitted[client_request_id] = "positive"
                                 logger.info("Feedback logged successfully")
                             else:
                                 st.error("Failed to submit feedback. Please check the logs.")
                             st.rerun()
                     with col2:
                         if st.button("👎", key=f"thumbs_down_{idx}"):
-                            logger.info(f"User clicked thumbs down for message {idx}, trace_id: {trace_id}")
-                            success = log_user_feedback(trace_id, False, user_id=user_info["user_id"])
+                            logger.info(f"User clicked thumbs down for message {idx}, client_request_id: {client_request_id}")
+                            success = log_user_feedback(client_request_id, False, user_id=user_info["user_id"])
                             if success:
-                                st.session_state.feedback_submitted[trace_id] = "negative"
+                                st.session_state.feedback_submitted[client_request_id] = "negative"
                                 logger.info("Feedback logged successfully")
                             else:
                                 st.error("Failed to submit feedback. Please check the logs.")
                             st.rerun()
                 else:
-                    feedback_type = st.session_state.feedback_submitted[trace_id]
+                    feedback_type = st.session_state.feedback_submitted[client_request_id]
                     st.caption(f"✓ Feedback submitted: {feedback_type}")
 
 # Accept user input
@@ -292,18 +292,18 @@ if prompt := st.chat_input("Ask me anything about your supply chain or finance d
             response_placeholder.markdown(markdown, unsafe_allow_html=True)
             logger.info(f"Stream complete. Total events: {event_count}, Sections: {len(sections)}")
 
-            # Store the trace ID for feedback (from manual tracing)
+            # Store the client request ID for feedback tracking
             try:
-                logger.info("Retrieving trace ID from agent...")
-                trace_id = agent.get_last_trace_id()
-                if trace_id:
-                    logger.info(f"Trace ID retrieved: {trace_id}")
-                    st.session_state.trace_ids.append(trace_id)
-                    logger.info(f"Trace ID stored successfully. Total traces: {len(st.session_state.trace_ids)}")
+                logger.info("Retrieving client request ID from agent...")
+                client_request_id = agent.get_last_client_request_id()
+                if client_request_id:
+                    logger.info(f"Client request ID retrieved: {client_request_id}")
+                    st.session_state.client_request_ids.append(client_request_id)
+                    logger.info(f"Client request ID stored successfully. Total: {len(st.session_state.client_request_ids)}")
                 else:
-                    logger.warning("No trace ID available from agent")
+                    logger.warning("No client request ID available from agent")
             except Exception as e:
-                logger.error(f"Error retrieving or storing trace ID: {e}", exc_info=True)
+                logger.error(f"Error retrieving or storing client request ID: {e}", exc_info=True)
 
         except Exception as e:
             logger.error(f"Error querying endpoint: {e}", exc_info=True)
@@ -340,11 +340,11 @@ with st.sidebar:
 
     st.header("📊 Session Info")
     st.write(f"**Messages:** {len(st.session_state.messages)}")
-    st.write(f"**Traces:** {len(st.session_state.trace_ids)}")
+    st.write(f"**Requests:** {len(st.session_state.client_request_ids)}")
     st.write(f"**Feedback:** {len(st.session_state.feedback_submitted)}")
 
     if st.button("🔄 Clear Chat"):
         st.session_state.messages = []
-        st.session_state.trace_ids = []
+        st.session_state.client_request_ids = []
         st.session_state.feedback_submitted = {}
         st.rerun()
