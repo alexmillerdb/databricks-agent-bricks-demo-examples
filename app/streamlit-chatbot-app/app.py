@@ -24,10 +24,23 @@ assert SERVING_ENDPOINT, \
      "https://docs.databricks.com/aws/en/generative-ai/agent-framework/chat-app#deploy-the-databricks-app")
 
 # Configure MLflow experiment for tracing
+# Set tracking URI if provided via environment variable
+MLFLOW_TRACKING_URI = os.getenv('MLFLOW_TRACKING_URI')
+if MLFLOW_TRACKING_URI:
+    mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
+    logger.info(f"MLflow tracking URI set to: {MLFLOW_TRACKING_URI}")
+else:
+    logger.info(f"MLflow tracking URI: {mlflow.get_tracking_uri()}")
+
 MLFLOW_EXPERIMENT_ID = os.getenv('MLFLOW_EXPERIMENT_ID')
 if MLFLOW_EXPERIMENT_ID:
-    mlflow.set_experiment(experiment_id=MLFLOW_EXPERIMENT_ID)
-    logger.info(f"MLflow experiment set to ID: {MLFLOW_EXPERIMENT_ID}")
+    try:
+        mlflow.set_experiment(experiment_id=MLFLOW_EXPERIMENT_ID)
+        logger.info(f"MLflow experiment set to ID: {MLFLOW_EXPERIMENT_ID}")
+    except Exception as e:
+        logger.warning(f"Failed to set experiment by ID: {e}. Falling back to experiment name.")
+        mlflow.set_experiment("/Shared/streamlit-chatbot-app")
+        logger.info("MLflow experiment set to /Shared/streamlit-chatbot-app")
 else:
     # Fallback to experiment name if ID not provided
     mlflow.set_experiment("/Shared/streamlit-chatbot-app")
