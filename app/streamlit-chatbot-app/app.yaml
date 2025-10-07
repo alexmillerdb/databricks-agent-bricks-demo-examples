@@ -9,3 +9,5 @@ env:
     value: "false"
   - name: "SERVING_ENDPOINT"
     valueFrom: "serving-endpoint"
+  - name: "MLFLOW_EXPERIMENT_ID"
+    value: "1362705655702022"
