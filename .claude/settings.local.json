@@ -6,7 +6,8 @@
       "Bash(python test_trace_capture.py:*)",
       "Bash(export:*)",
       "Bash(python test_client_request_id.py:*)",
-      "Bash(source:*)"
+      "Bash(source:*)",
+      "Bash(python test_no_manual_tracing.py:*)"
     ],
     "deny": [],
     "ask": []

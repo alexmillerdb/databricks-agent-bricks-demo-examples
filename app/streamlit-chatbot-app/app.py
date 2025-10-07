@@ -298,6 +298,30 @@ if prompt := st.chat_input("Ask me anything about your supply chain or finance d
                 client_request_id = agent.get_last_client_request_id()
                 if client_request_id:
                     logger.info(f"Client request ID retrieved: {client_request_id}")
+
+                    # Tag the most recent trace with this client_request_id
+                    try:
+                        from mlflow.tracking import MlflowClient
+                        client = MlflowClient()
+                        # Get experiment ID
+                        experiment_id = os.environ.get("MLFLOW_EXPERIMENT_ID", "0")
+                        # Search for the most recent trace (just created)
+                        recent_traces = client.search_traces(
+                            experiment_ids=[experiment_id],
+                            max_results=1,
+                            order_by=["timestamp DESC"]
+                        )
+                        if recent_traces:
+                            # Update the trace with client_request_id tag
+                            client.set_trace_tag(
+                                request_id=recent_traces[0].info.trace_id,
+                                key="client_request_id",
+                                value=client_request_id
+                            )
+                            logger.info(f"Tagged trace {recent_traces[0].info.trace_id} with client_request_id: {client_request_id}")
+                    except Exception as tag_error:
+                        logger.warning(f"Could not tag trace with client_request_id: {tag_error}")
+
                     st.session_state.client_request_ids.append(client_request_id)
                     logger.info(f"Client request ID stored successfully. Total: {len(st.session_state.client_request_ids)}")
                 else:

@@ -44,55 +44,37 @@ class SimpleResponsesAgent(ResponsesAgent):
         Yields:
             ResponsesAgentStreamEvent objects as tokens arrive
 
-        Note: Uses client request ID approach for feedback tracking.
+        Note: No manual tracing - relies on serving endpoint's automatic tracing.
+        Client request ID is generated and stored for feedback tracking.
         """
         # Generate unique client request ID for this request
         client_request_id = f"req-{uuid.uuid4().hex[:8]}"
         self.current_client_request_id = client_request_id
         logger.info(f"Generated client request ID: {client_request_id}")
 
-        # Start manual span with client_request_id for feedback tracking
-        with mlflow.start_span(name="responses_agent_stream") as span:
-            # Tag the trace with client_request_id for later lookup
-            mlflow.update_current_trace(client_request_id=client_request_id)
-            logger.info(f"Tagged trace with client_request_id: {client_request_id}, trace_id: {span.trace_id}")
+        try:
+            event_count = 0
 
-            try:
-                response_text = []
-                event_count = 0
+            for event in self.client.responses.create(
+                input=request.input, stream=True, model=self.model
+            ):
+                event_count += 1
 
-                for event in self.client.responses.create(
-                    input=request.input, stream=True, model=self.model
-                ):
-                    event_count += 1
+                # Filter out problematic function_call_output events to avoid Pydantic warnings
+                if hasattr(event, 'item') and hasattr(event.item, 'type'):
+                    if event.item.type == 'function_call_output':
+                        # Log the handoff but don't yield the problematic event
+                        logger.debug(f"Skipping function_call_output event: {getattr(event.item, 'output', '')}")
+                        continue
 
-                    # Collect text deltas for trace output
-                    if hasattr(event, 'delta') and event.delta:
-                        response_text.append(event.delta)
+                # Yield the raw event object directly without conversion
+                yield event
 
-                    # Filter out problematic function_call_output events to avoid Pydantic warnings
-                    if hasattr(event, 'item') and hasattr(event.item, 'type'):
-                        if event.item.type == 'function_call_output':
-                            # Log the handoff but don't yield the problematic event
-                            logger.debug(f"Skipping function_call_output event: {getattr(event.item, 'output', '')}")
-                            continue
+            logger.info(f"Completed streaming {event_count} events for client_request_id: {client_request_id}")
 
-                    # Yield the raw event object directly without conversion
-                    yield event
-
-                # Set span attributes with simple values (avoiding complex object serialization)
-                span.set_attribute("event_count", event_count)
-                span.set_attribute("model", self.model)
-                span.set_attribute("client_request_id", client_request_id)
-                span.set_attribute("response_preview", "".join(response_text)[:500] if response_text else "")
-                logger.info(f"Completed trace with client_request_id: {client_request_id}")
-
-            except Exception as e:
-                # Set error status on span
-                span.set_status("ERROR")
-                span.set_attribute("error", str(e))
-                logger.error(f"Error in predict_stream: {e}")
-                raise
+        except Exception as e:
+            logger.error(f"Error in predict_stream: {e}")
+            raise
 
     def get_last_client_request_id(self) -> Optional[str]:
         """Get the client request ID from the last predict_stream call."""
@@ -169,10 +151,15 @@ def log_user_feedback(client_request_id: str, thumbs_up: bool, comment: str = ""
             order_by=["timestamp DESC"]
         )
 
-        # Find matching trace
+        # Find matching trace by checking tags
         matching_trace = None
         for trace in recent_traces:
+            # Check both trace.info.client_request_id (from mlflow.update_current_trace)
+            # and trace.info.tags (from mlflow.update_trace with tags)
             if hasattr(trace.info, 'client_request_id') and trace.info.client_request_id == client_request_id:
+                matching_trace = trace
+                break
+            elif hasattr(trace.info, 'tags') and trace.info.tags.get('client_request_id') == client_request_id:
                 matching_trace = trace
                 break
 

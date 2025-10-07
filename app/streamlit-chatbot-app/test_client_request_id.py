@@ -7,6 +7,7 @@ This validates that:
 """
 import os
 import time
+import mlflow
 from model_serving_utils import get_agent, log_user_feedback
 from mlflow.types.responses import ResponsesAgentRequest
 from mlflow.tracking import MlflowClient
@@ -15,8 +16,17 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Set up Databricks MLflow tracking
 os.environ["DATABRICKS_CONFIG_PROFILE"] = "e2-demo-west"
-SERVING_ENDPOINT = "mas-3bfe8584-endpoint"
+SERVING_ENDPOINT = os.environ.get("SERVING_ENDPOINT", "mas-3bfe8584-endpoint")
+EXPERIMENT_ID = os.environ.get("MLFLOW_EXPERIMENT_ID", "3040165994661313")
+
+# Configure MLflow to use Databricks tracking server
+mlflow.set_tracking_uri("databricks")
+mlflow.set_experiment(experiment_id=EXPERIMENT_ID)
+
+print(f"MLflow Tracking URI: {mlflow.get_tracking_uri()}")
+print(f"MLflow Experiment ID: {EXPERIMENT_ID}")
 
 print(f"Testing client_request_id approach with endpoint: {SERVING_ENDPOINT}\n")
 print("="*80)
@@ -57,12 +67,12 @@ try:
     print("Waiting 3 seconds for trace to be indexed...")
     time.sleep(3)
 
-    experiment_id = os.environ.get("MLFLOW_EXPERIMENT_ID", "0")
+    # Use the configured experiment ID
     client = MlflowClient()
 
     # Search recent traces and filter manually
     recent_traces = client.search_traces(
-        experiment_ids=[experiment_id],
+        experiment_ids=[EXPERIMENT_ID],
         max_results=50,
         order_by=["timestamp DESC"]
     )
@@ -110,7 +120,7 @@ try:
 
         # Verify feedback was attached - search again for the trace
         recent_traces = client.search_traces(
-            experiment_ids=[experiment_id],
+            experiment_ids=[EXPERIMENT_ID],
             max_results=50,
             order_by=["timestamp DESC"]
         )
