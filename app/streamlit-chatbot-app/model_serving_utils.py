@@ -47,7 +47,7 @@ class SimpleResponsesAgent(ResponsesAgent):
         # Start manual span with minimal metadata to avoid serialization issues
         with mlflow.start_span(name="responses_agent_stream") as span:
             # Store the trace ID from the span
-            self.current_trace_id = span.request_id
+            self.current_trace_id = span.trace_id
             logger.info(f"Started manual trace: {self.current_trace_id}")
 
             try:
