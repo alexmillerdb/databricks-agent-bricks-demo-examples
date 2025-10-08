@@ -78,25 +78,14 @@ Agent instructions are in `agent_bricks/`:
 - **`sec-finance-agent.md`**: Knowledge agent for SEC filings and public disclosures
 
 **Deploy agents:**
-1. Create agents in Databricks using Agent Framework
+1. Create agents in Databricks using Agent Bricks
 2. Upload instruction documents as agent configurations
-3. Deploy to serving endpoints for production use
-
-### Step 4: Deploy Serving Endpoint
-
-Create a Databricks serving endpoint for your agent:
-
-```bash
-# Using Databricks CLI or UI
-databricks serving-endpoints create \
-  --name "mas-3bfe8584-endpoint" \
-  --model-name "your-agent-model" \
-  --model-version 1
-```
+3. Test and evaluate your agents
+4. Deploy to serving endpoints for production use
 
 **Important**: Note the experiment ID where the endpoint logs traces - you'll need this for the app.
 
-### Step 5: Run Streamlit Chatbot
+### Step 4: Run Streamlit Chatbot
 
 **Local Development:**
 
