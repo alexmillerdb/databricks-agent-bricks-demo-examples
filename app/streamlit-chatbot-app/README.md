@@ -2,16 +2,25 @@
 
 Production-ready chatbot application built with Databricks Agent Framework, featuring:
 - **ResponsesAgent** pattern for scalable deployments
-- **MLflow 3.x tracing** for full observability
+- **MLflow tracing** with client request ID for feedback association
 - **User feedback collection** (👍/👎) linked to traces
-- **Streaming responses** for improved UX
-- **Local development** support with `.env` configuration
+- **Streaming responses** with real-time token display
+- **Dual deployment**: Local development and Databricks Apps
 
 ## Architecture
 
-- `app.py`: Main Streamlit application with streaming chat interface
-- `model_serving_utils.py`: ResponsesAgent implementation with MLflow tracing
+- `app.py`: Main Streamlit application with streaming chat interface and feedback UI
+- `model_serving_utils.py`: ResponsesAgent implementation with client request ID tracking
 - `app.yaml`: Databricks Apps deployment configuration
+- `test_*.py`: Test scripts for validating tracing and feedback functionality
+
+## Key Design Decisions
+
+### Tracing Strategy
+- **No manual client-side tracing**: Avoids duplicate traces
+- **Serving endpoint auto-tracing**: Endpoint creates traces automatically
+- **Client request ID tagging**: Used to associate feedback with the correct trace
+- **Single trace per request**: Eliminates confusion between user and service principal traces
 
 ## Local Development
 
@@ -34,27 +43,34 @@ Production-ready chatbot application built with Databricks Agent Framework, feat
 
 2. **Configure environment variables:**
 
-   Create or update the `.env` file in the repository root (already exists):
+   Create or update the `.env` file in the **repository root** (two levels up):
    ```bash
-   # .env file location: /path/to/repo/.env
-   DATABRICKS_HOST=https://e2-demo-west.cloud.databricks.com
-   DATABRICKS_CONFIG_PROFILE=e2-demo-west
+   # .env file location: ../../.env
+   DATABRICKS_HOST=https://your-workspace.cloud.databricks.com
+   DATABRICKS_CONFIG_PROFILE=your-profile-name
    MLFLOW_TRACKING_URI=databricks
    MLFLOW_REGISTRY_URI=databricks-uc
-   MLFLOW_EXPERIMENT_ID=1362705655702022
+   MLFLOW_EXPERIMENT_ID=your-experiment-id  # Must match serving endpoint's experiment
 
    # Set this to your deployed serving endpoint name
-   SERVING_ENDPOINT=mas-3bfe8584-endpoint
+   SERVING_ENDPOINT=your-endpoint-name
    ```
+
+   **Important**: `MLFLOW_EXPERIMENT_ID` must match the experiment ID configured in your serving endpoint to avoid duplicate traces.
 
 3. **Run the app:**
    ```bash
+   # Load environment variables
+   source ../../.env
+
+   # Run Streamlit
    streamlit run app.py
    ```
 
 4. **Access locally:**
    - Open browser to `http://localhost:8501`
    - Chat interface will load with your configured endpoint
+   - MLflow traces will be logged to Databricks (not local filesystem)
 
 ### Local Testing Workflow
 
@@ -77,90 +93,166 @@ Production-ready chatbot application built with Databricks Agent Framework, feat
 
 ### Environment Variables
 
-| Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `SERVING_ENDPOINT` | Yes | - | Name of Databricks serving endpoint to query |
-| `MLFLOW_EXPERIMENT_ID` | No | `/Shared/streamlit-chatbot-app` | MLflow experiment for trace logging |
-| `DATABRICKS_HOST` | Auto | From CLI config | Databricks workspace URL |
-| `DATABRICKS_CONFIG_PROFILE` | Auto | `DEFAULT` | CLI profile name |
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `SERVING_ENDPOINT` | **Yes** | Name of Databricks serving endpoint to query |
+| `MLFLOW_EXPERIMENT_ID` | **Yes** | MLflow experiment for trace logging (**must match endpoint's experiment**) |
+| `DATABRICKS_CONFIG_PROFILE` | **Yes** | Databricks CLI profile name for authentication |
+| `DATABRICKS_HOST` | Optional | Databricks workspace URL (inferred from profile if not set) |
+| `MLFLOW_TRACKING_URI` | Optional | Set to `databricks` to use Databricks MLflow tracking |
+| `MLFLOW_REGISTRY_URI` | Optional | Set to `databricks-uc` for Unity Catalog model registry |
+
+### Testing Scripts
+
+Run tests to verify tracing and feedback functionality:
+
+```bash
+# Load environment
+source ../../.env
+
+# Test that only one trace is created (no duplicates)
+python test_no_manual_tracing.py
+
+# Test client request ID and feedback logging
+python test_client_request_id.py
+```
+
+**What the tests verify:**
+- Only ONE trace is created per query (serving endpoint trace only)
+- Client request ID is generated and stored
+- Feedback can be logged and associated with the correct trace
+- Traces are visible in Databricks MLflow experiment
 
 ## Deployment to Databricks Apps
 
-### Prerequisites
+### Understanding app.yaml
 
-1. **Databricks bundle** configured (see `databricks.yml` in repo root)
-2. **Serving endpoint** deployed and accessible
-3. **Workspace permissions** for Apps deployment
+The `app.yaml` file configures how the app runs in Databricks Apps:
 
-### Deploy
+```yaml
+command: ["streamlit", "run", "app.py"]
 
-```bash
-# From repository root
-databricks bundle deploy
-
-# Follow Databricks Apps documentation to create app resource
-# Reference the serving endpoint in app.yaml
+env:
+  - name: STREAMLIT_BROWSER_GATHER_USAGE_STATS
+    value: "false"
+  - name: "SERVING_ENDPOINT"
+    valueFrom: "serving-endpoint"  # References Databricks resource
+  - name: "MLFLOW_TRACKING_URI"
+    value: "databricks"
+  - name: "MLFLOW_EXPERIMENT_ID"
+    value: "3040165994661313"  # Your MLflow experiment ID
 ```
+
+**Key configuration points:**
+1. **SERVING_ENDPOINT**: Uses `valueFrom: "serving-endpoint"` to reference a Databricks workspace resource
+2. **MLFLOW_EXPERIMENT_ID**: Must match the experiment your serving endpoint logs to
+3. **MLFLOW_TRACKING_URI**: Set to `databricks` to use workspace MLflow tracking
+
+### Deploy Steps
+
+1. **Ensure your serving endpoint is deployed:**
+   ```bash
+   databricks serving-endpoints get <your-endpoint-name>
+   ```
+
+2. **Update app.yaml with your values:**
+   - Set `MLFLOW_EXPERIMENT_ID` to match your endpoint's experiment
+   - Verify `valueFrom: "serving-endpoint"` matches your resource name
+
+3. **Deploy using Databricks Apps:**
+   ```bash
+   # Follow Databricks Apps documentation for deployment
+   # The app will use service principal authentication automatically
+   ```
 
 ### Key Differences: Local vs. Deployed
 
 | Feature | Local Development | Databricks Apps |
 |---------|------------------|-----------------|
-| Environment | `.env` file | `app.yaml` + workspace resources |
-| Authentication | CLI profile | Managed identity |
-| User context | `local_user` | Real user from headers |
-| Serving endpoint | Via `SERVING_ENDPOINT` env var | Via `app.yaml` resource reference |
+| Environment | `.env` file from repo root | `app.yaml` configuration |
+| Authentication | CLI profile (your user) | Service principal (managed identity) |
+| User context | `local_user` fallback | Real user from Databricks headers |
+| MLflow tracking | Databricks (via CLI auth) | Databricks (via service principal) |
+| Trace ownership | Your user | Service principal (endpoint's identity) |
 
 ## Features
 
-### 1. ResponsesAgent Pattern
+### 1. Single-Trace Architecture
 
-Uses MLflow's production-recommended `ResponsesAgent` class:
-- Supports both streaming and non-streaming modes
-- Built-in MLflow tracing with `@mlflow.trace()` decorators
-- Compatible with MLflow Model Registry for deployment
+**Problem solved**: Eliminates duplicate traces when client and serving endpoint both create traces.
 
-### 2. MLflow Tracing
+**How it works**:
+- Serving endpoint automatically creates traces (no client-side tracing)
+- Client generates unique `client_request_id` for each query
+- After streaming, client tags the endpoint's trace with `client_request_id`
+- Feedback function searches for trace by `client_request_id` tag
+- Result: Only ONE trace per request, with proper feedback association
 
-Every chat interaction generates a trace containing:
-- Full conversation history (input)
-- Model response (output)
-- Latency metrics
-- User feedback (when submitted)
+### 2. ResponsesAgent Pattern
 
-Traces are viewable in MLflow Experiments UI.
+Uses Databricks' `ResponsesAgent` class for production deployments:
+- Supports streaming via `predict_stream()` generator
+- No manual MLflow span creation (avoids duplicate traces)
+- Compatible with Databricks serving endpoints using Responses API
 
-### 3. User Feedback Collection
+### 3. MLflow Tracing & Feedback
 
-- 👍/👎 buttons appear after each assistant response
-- Feedback links to the trace ID via `mlflow.log_feedback()`
-- User ID captured from Streamlit context (or `local_user` in dev)
-- Feedback appears in MLflow trace assessments for model improvement
+**Trace flow:**
+1. User sends query → Serving endpoint creates trace automatically
+2. Client generates `client_request_id` and tags the trace
+3. User clicks 👍/👎 → App searches for trace by `client_request_id`
+4. Feedback logged to correct trace via `mlflow.log_feedback()`
+
+**Trace contents:**
+- Full conversation history
+- Model response with streaming events
+- Client request ID (for feedback lookup)
+- User feedback assessments
 
 ### 4. Streaming Responses
 
-- Token-by-token rendering using `predict_stream()`
-- Cursor indicator (`▌`) during streaming
+- Real-time token-by-token display
+- Handles different event types: `response.output_text.delta`, `response.output_item.done`, `function_call`, etc.
+- Filters problematic events (e.g., `function_call_output`) to avoid Pydantic warnings
 - Graceful error handling with user-friendly messages
 
 ## Troubleshooting
 
+### Seeing duplicate traces (two traces per request)
+
+**Symptom**: Two traces appear in MLflow for each query - one under your user, one under service principal.
+
+**Cause**: `MLFLOW_EXPERIMENT_ID` doesn't match the serving endpoint's experiment.
+
+**Fix**:
+1. Find your endpoint's experiment ID:
+   ```bash
+   databricks serving-endpoints get <endpoint-name> | grep experiment
+   ```
+2. Update `.env` file with matching `MLFLOW_EXPERIMENT_ID`
+3. Restart the app
+
 ### "Unable to determine serving endpoint"
 - Ensure `SERVING_ENDPOINT` is set in `.env`
 - Verify endpoint exists: `databricks serving-endpoints get <endpoint-name>`
+- Check endpoint is using Responses API (not legacy chat API)
 
 ### "Authentication failed"
-- Run `databricks auth login` to refresh credentials
+- Run `databricks auth login --host <workspace-url>` to refresh credentials
 - Check `DATABRICKS_CONFIG_PROFILE` matches your CLI profile
+- Verify profile exists: `databricks auth profiles`
 
 ### "No traces appearing in MLflow"
-- Verify `MLFLOW_EXPERIMENT_ID` points to valid experiment
+- Verify `MLFLOW_EXPERIMENT_ID` points to valid experiment in your workspace
 - Check experiment permissions (you need WRITE access)
-- Ensure `mlflow>=3.1.0` is installed
+- Ensure `MLFLOW_TRACKING_URI=databricks` is set
+- Run test scripts to verify: `python test_no_manual_tracing.py`
 
-### Streaming not working
-- Check endpoint type supports Responses API
-- Verify event parsing logic in `app.py` (event types may vary by endpoint)
+### Feedback not associating with traces
+- Check that `client_request_id` is being generated (see logs)
+- Verify traces are tagged: Look for `client_request_id` tag in MLflow UI
+- Ensure feedback search looks in correct experiment
+- Run `python test_client_request_id.py` to validate
 
 ## Example Queries
 
