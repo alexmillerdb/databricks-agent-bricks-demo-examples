@@ -58,6 +58,17 @@ genie/00-setup-data-genie.ipynb
 - Finance tables: `product_master`, `distributors`, `cogs_reference`, `sales_orders`
 - Contract documents: `contract_texts`
 
+```bash
+# Run in Databricks notebook
+data/00-download-unstructured-data.ipynb
+```
+
+**Creates PDFs in UC Volumes:**
+- 10-Q
+- Annual Report
+- Call Transcripts
+- Earning Releases
+
 ### Step 2: Create Genie Spaces
 
 Build text-to-SQL conversational interfaces using Databricks Genie:
